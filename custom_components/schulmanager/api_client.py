@@ -252,9 +252,11 @@ class SchulmanagerClient:
                 if self._institution_id:
                     _LOGGER.debug("Extracted institutionId from login: %s", self._institution_id)
 
+# --- RPL-FIX: Schüler und Eltern-Konten möglich ---
             parents = user.get("associatedParents") or []
             self._students = []
 
+            # 1. Eltern-Konto: Suche in associatedParents
             for p in parents:
                 st = (p or {}).get("student") or {}
                 sid = st.get("id")
@@ -268,6 +270,36 @@ class SchulmanagerClient:
                     {"id": str(sid), "classId": st.get("classId"), "name": name}
                 )
 
+            # 2. Schüler-Fallback: Falls keine Kinder über associatedParents gefunden wurden
+            if not self._students:
+                _LOGGER.debug("Keine Schüler über associatedParents; prüfe Schüler-Fallback")
+
+                # Fallback A: associatedStudents / associatedStudent
+                raw_students = user.get("associatedStudents") or user.get("associatedStudent") or data.get("associatedStudents")
+                if raw_students:
+                    if isinstance(raw_students, dict):
+                        raw_students = [raw_students]
+                    for st in raw_students:
+                        sid = st.get("id") or st.get("studentId")
+                        if sid:
+                            firstname = st.get("firstname") or st.get("firstName") or ""
+                            lastname = st.get("lastname") or st.get("lastName") or ""
+                            name = f"{firstname} {lastname}".strip() or st.get("name") or "Schüler"
+                            self._students.append(
+                                {"id": str(sid), "classId": st.get("classId"), "name": name}
+                            )
+
+                # Fallback B: Eigener Account ist der Schüler (user-Objekt selbst)
+                if not self._students and user.get("id"):
+                    sid = user.get("studentId") or user.get("id")
+                    firstname = user.get("firstname") or user.get("firstName") or ""
+                    lastname = user.get("lastname") or user.get("lastName") or ""
+                    name = f"{firstname} {lastname}".strip() or user.get("name") or "Schüler"
+                    self._students.append(
+                        {"id": str(sid), "classId": user.get("classId"), "name": name}
+                    )
+
+            _LOGGER.debug("Erkannte Schüler für Account %s: %d", self.username, len(self._students))
             await self._dump("students_extracted.json", self._students)
 
     async def _discover_bundle_version(self) -> str | None:
